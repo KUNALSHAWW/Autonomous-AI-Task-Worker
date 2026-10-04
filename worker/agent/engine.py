@@ -22,6 +22,7 @@ import asyncio
 import hashlib
 import json
 import os
+import re
 import time
 import traceback
 from typing import Any, Awaitable, Callable, TypedDict
@@ -42,6 +43,16 @@ from .verify import Verifier
 Emit = Callable[[str, dict], Awaitable[None]]
 AskUser = Callable[[Pending], Awaitable[str]]
 CONTENT_TOOLS = {"browser_goto", "browser_click", "browser_fill_form", "browser_read", "read_file", "http_request"}
+
+
+YES = {"approve", "approved", "yes", "y", "ok", "okay", "confirm", "confirmed", "go", "proceed", "allow"}
+NO = {"no", "not", "don't", "dont", "deny", "denied", "reject", "rejected", "stop", "never", "cancel"}
+
+
+def is_approval(answer: str) -> bool:
+    """Approve only on an explicit yes, and never when the answer also contains a no."""
+    words = re.findall(r"[a-z']+", answer.lower())
+    return bool(words) and words[0] in YES and not (set(words) & NO)
 
 
 class GraphState(TypedDict, total=False):
@@ -244,7 +255,7 @@ class Agent:
     def _apply_approval(self, pend: dict, answer: str) -> None:
         s = self.state
         rule = pend["rule"]
-        approved = answer.strip().lower().startswith(("y", "approve", "ok", "go", "sure", "confirm"))
+        approved = is_approval(answer)
         s.approvals.append({"rule": rule.get("id"), "action": pend["action"], "approved": approved,
                             "answer": answer, "step": len(s.steps)})
         if approved:

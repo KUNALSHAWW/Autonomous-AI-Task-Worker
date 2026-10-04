@@ -28,6 +28,10 @@ from ..gate import SAFE_METHODS, Decision, Gate
 DISTILL_JS = open(os.path.join(os.path.dirname(__file__), "distill.js")).read()
 
 
+class AmbiguousField(Exception):
+    pass
+
+
 @dataclass
 class PageView:
     url: str
@@ -82,6 +86,7 @@ class BrowserSession:
         self.context = await self._browser.new_context(accept_downloads=True, viewport={"width": 1200, "height": 850})
         self.context.set_default_timeout(8000)
         await self.context.route("**/*", self._route)
+        self.context.on("page", self._wire)  # popups and new tabs get the same download/response handling
         self.page = await self.context.new_page()
         self._wire(self.page)
 
@@ -116,6 +121,9 @@ class BrowserSession:
             return
         fields = self._semantic_fields(request)
         decision = self.gate.check_write(method, url, fields)
+        if decision.action == "allow" and decision.message == "sign-in":
+            await route.continue_()
+            return
         if decision.action == "allow":
             w = self.gate.record_write(method, url, fields, decision.fingerprint)
             self._write_by_request[id(request)] = w
@@ -163,7 +171,7 @@ class BrowserSession:
         if w:
             w.status = response.status
             w.outcome = self.gate.classify(response.status)
-        if req.is_navigation_request() and response.frame == self.page.main_frame:
+        if self.page and req.is_navigation_request() and response.frame == self.page.main_frame:
             self.last_status = response.status
 
     def _on_request_failed(self, request) -> None:
@@ -214,6 +222,17 @@ class BrowserSession:
     async def _after(self, before: PageView | None, message: str) -> ActionResult:
         await asyncio.sleep(0.15)
         await self._settle()
+        # Redirect hops never reach the route handler, so re-check where we actually ended up.
+        landed = self.gate.check_navigation(self.page.url)
+        if landed.action == "deny":
+            try:
+                await self.page.goto(before.url if before else "about:blank", wait_until="domcontentloaded")
+            except PWError:
+                await self.page.goto("about:blank")
+            self.pending_blocks = []
+            self.view = None
+            return ActionResult(False, f"{message}. BLOCKED: the page redirected somewhere you may not go. "
+                                       f"{landed.message}", "blocked")
         downloads, self.new_downloads = self.new_downloads, []
         try:
             view = await self.snapshot()
@@ -250,6 +269,7 @@ class BrowserSession:
 
     async def goto(self, url: str) -> ActionResult:
         before = self.view
+        self.pending_blocks = []
         if url.strip().lower() == "back":
             try:
                 await self.page.go_back()
@@ -284,6 +304,7 @@ class BrowserSession:
 
     async def click(self, element: str) -> ActionResult:
         before = self.view
+        self.pending_blocks = []
         loc, label = self._locator(element)
         try:
             if await loc.count() == 0:
@@ -307,12 +328,17 @@ class BrowserSession:
     async def fill_form(self, fields: dict, submit: bool | str = False) -> ActionResult:
         """Fill fields by element number or by (fuzzy) label. Selects and checkboxes are handled too."""
         before = self.view
+        self.pending_blocks = []
         if not self.view:
             await self.snapshot()
         done, problems = [], []
         last_loc = None
         for key, value in fields.items():
-            loc, desc = await self._find_field(str(key))
+            try:
+                loc, desc = await self._find_field(str(key))
+            except AmbiguousField as e:
+                problems.append(str(e))
+                continue
             if loc is None:
                 problems.append(f"no field matches '{key}'")
                 continue
@@ -326,11 +352,28 @@ class BrowserSession:
                 tag = await loc.evaluate("el => el.tagName + ':' + (el.type || '')")
                 if tag.startswith("SELECT"):
                     ok = await self._select(loc, real)
+                    if isinstance(ok, str):
+                        problems.append(ok)
+                        continue
                     if not ok:
                         opts = await loc.evaluate("el => Array.from(el.options).map(o => o.text.trim())")
                         problems.append(f"'{value_str}' is not an option for {desc}. Options: {opts[:30]}")
                         continue
-                elif tag in ("INPUT:checkbox", "INPUT:radio"):
+                elif tag == "INPUT:radio":
+                    name = await loc.get_attribute("name")
+                    group = self.page.locator(f'input[type=radio][name="{name}"]')
+                    picked = False
+                    for i in range(await group.count()):
+                        r = group.nth(i)
+                        lab = await r.evaluate("el => ((el.labels && el.labels[0] && el.labels[0].innerText) || el.value || '').trim()")
+                        if lab.lower() == real.strip().lower() or (await r.get_attribute("value") or "").lower() == real.strip().lower():
+                            await r.check(timeout=4000)
+                            picked = True
+                            break
+                    if not picked:
+                        problems.append(f"no radio option '{value_str}' for {desc}")
+                        continue
+                elif tag == "INPUT:checkbox":
                     want = real.strip().lower() not in ("", "false", "no", "0", "off", "unchecked")
                     await (loc.check(timeout=4000) if want else loc.uncheck(timeout=4000))
                 else:
@@ -377,7 +420,7 @@ class BrowserSession:
             loc = self.page.locator(f'[data-aw="{key_clean}"]')
             return (loc, f"[{key_clean}]") if await loc.count() else (None, "")
         want = re.sub(r"[^a-z0-9#]+", " ", key.lower()).strip()
-        best, best_score = None, 0.0
+        best, best_score, tied = None, 0.0, []
         for name, label in (self.view.fields if self.view else {}).items():
             lab = re.sub(r"[^a-z0-9#]+", " ", label.lower()).strip()
             score = 0.0
@@ -391,16 +434,26 @@ class BrowserSession:
                 overlap = set(want.split()) & set(lab.split())
                 score = len(overlap) / max(1, len(set(want.split())))
             if score > best_score:
-                best, best_score = name, score
+                best, best_score, tied = name, score, [name]
+            elif score == best_score and score > 0 and name != best:
+                tied.append(name)
         if best is None or best_score < 0.5:
             return None, ""
+        if len(tied) > 1 and best_score < 3:
+            labels = ", ".join(f'"{self.view.fields[n]}"' for n in tied)
+            raise AmbiguousField(f"'{key}' matches several fields ({labels}); use the full label or the [number]")
         loc = self.page.locator(f'[name="{best}"]').first
         return loc, f'"{self.view.fields[best]}"'
 
-    async def _select(self, loc, value: str) -> bool:
+    async def _select(self, loc, value: str) -> bool | str:
         opts = await loc.evaluate("el => Array.from(el.options).map(o => o.text.trim())")
         v = value.strip().lower()
-        choice = next((o for o in opts if o.lower() == v), None) or next((o for o in opts if v and v in o.lower()), None)
+        choice = next((o for o in opts if o.lower() == v), None)
+        if not choice:
+            partial = [o for o in opts if v and v in o.lower()]
+            if len(partial) > 1:
+                return f"'{value}' is ambiguous: it matches {partial}. Use the exact option text"
+            choice = partial[0] if partial else None
         if not choice:
             return False
         await loc.select_option(label=choice, timeout=4000)

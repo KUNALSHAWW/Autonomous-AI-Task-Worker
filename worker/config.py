@@ -95,7 +95,8 @@ def make_llm(s: Settings):
         if not key and not base:
             raise RuntimeError("No Ollama endpoint configured. Set OLLAMA_API_KEY (Ollama Cloud) and OLLAMA_MODEL, "
                                "or OLLAMA_BASE_URL for a local Ollama server (see README).")
-        return LangChainLLM(make_ollama(model, key, base), f"{model} @ ChatOllama ({base or 'ollama.com'})")
+        return LangChainLLM(make_ollama(model, key, base), f"{model} @ ChatOllama ({base or 'ollama.com'})",
+                            native_tools=s.native_tools)
     if s.provider == "anthropic":
         return AnthropicLLM(key, model)
     if not key:

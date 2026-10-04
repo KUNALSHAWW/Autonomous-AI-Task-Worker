@@ -11,7 +11,7 @@ import random
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
-from .base import LLMError, LLMReply, ToolCall, ToolSpec, tool_call_from_text
+from .base import LLMError, LLMReply, ToolCall, ToolSpec, tool_call_from_text, tools_prompt
 
 OLLAMA_CLOUD = "https://ollama.com"
 OLLAMA_LOCAL = "http://localhost:11434"
@@ -46,7 +46,8 @@ def _to_lc(messages: list[dict]):
 class LangChainLLM:
     """Adapter: any LangChain BaseChatModel -> the worker's `chat` interface."""
 
-    def __init__(self, model, name: str, max_retries: int = 4):
+    def __init__(self, model, name: str, max_retries: int = 4, native_tools: bool = True):
+        self.native_tools = native_tools
         self.model = model
         self.name = name
         self.max_retries = max_retries
@@ -54,8 +55,10 @@ class LangChainLLM:
     async def chat(self, messages, tools: list[ToolSpec] | None = None, json_mode: bool = False,
                    temperature: float = 0.1, max_tokens: int = 1200, purpose: str = "") -> LLMReply:
         runnable = self.model
-        if tools:
+        if tools and self.native_tools:
             runnable = self.model.bind_tools([t.openai() for t in tools])
+        elif tools:
+            messages = [{"role": "system", "content": tools_prompt(tools)}] + list(messages)
         elif json_mode:
             runnable = self.model.bind(format="json")
         last = ""
@@ -65,6 +68,10 @@ class LangChainLLM:
                 break
             except Exception as e:  # provider errors come in many shapes
                 last = f"{type(e).__name__}: {str(e)[:300]}"
+                if tools and self.native_tools and "support" in last.lower() and "tool" in last.lower():
+                    # e.g. "model does not support tools": fall back to text tool calls for good
+                    self.native_tools = False
+                    return await self.chat(messages, tools, json_mode, temperature, max_tokens, purpose)
                 if any(s in last.lower() for s in ("unauthorized", "401", "403", "not found", "404")):
                     raise LLMError(last) from e
                 await asyncio.sleep(min(2 ** attempt + random.random(), 30))

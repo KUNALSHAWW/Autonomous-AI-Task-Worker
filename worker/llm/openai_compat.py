@@ -12,7 +12,7 @@ import random
 
 import httpx
 
-from .base import LLMError, LLMReply, ToolCall, ToolSpec, tool_call_from_text
+from .base import LLMError, LLMReply, ToolCall, ToolSpec, tool_call_from_text, tools_prompt
 
 RETRYABLE = {408, 409, 425, 429, 500, 502, 503, 504, 529}
 
@@ -36,9 +36,11 @@ class OpenAICompatLLM:
         if tools and self.native_tools:
             body["tools"] = [t.openai() for t in tools]
             body["tool_choice"] = "auto"
+        elif tools:
+            body["messages"] = [{"role": "system", "content": tools_prompt(tools)}] + list(messages)
         elif json_mode:
             body["response_format"] = {"type": "json_object"}
-        data = await self._post(body)
+        data = await self._post(body, tools)
         try:
             msg = data["choices"][0]["message"]
         except (KeyError, IndexError, TypeError) as e:
@@ -60,7 +62,7 @@ class OpenAICompatLLM:
             call = tool_call_from_text(text, {t.name for t in tools})
         return LLMReply(text=text, tool_call=call, usage=data.get("usage") or {})
 
-    async def _post(self, body: dict) -> dict:
+    async def _post(self, body: dict, tools: list[ToolSpec] | None = None) -> dict:
         url = f"{self.base_url}/chat/completions"
         headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
         last = ""
@@ -74,12 +76,12 @@ class OpenAICompatLLM:
                     return resp.json()
                 last = f"HTTP {resp.status_code}: {resp.text[:400]}"
                 # Some providers reject the call when the model emits a malformed tool call.
-                if resp.status_code == 400 and "tool" in resp.text.lower() and "tools" in body:
+                if resp.status_code == 400 and "tools" in body and tools:
+                    # The endpoint rejected native tool calling (unsupported schema, malformed call...).
+                    # Switch to text tool calls for the rest of the run and describe the tools in the prompt.
+                    self.native_tools = False
                     body = {k: v for k, v in body.items() if k not in ("tools", "tool_choice")}
-                    body["messages"] = body["messages"] + [{
-                        "role": "user",
-                        "content": "Your previous tool call was malformed. Reply with ONLY a JSON object "
-                                   '{"tool": "<name>", "args": {...}} for your next action.'}]
+                    body["messages"] = [{"role": "system", "content": tools_prompt(tools)}] + body["messages"]
                     continue
                 if resp.status_code == 400 and "response_format" in body:
                     body = {k: v for k, v in body.items() if k != "response_format"}

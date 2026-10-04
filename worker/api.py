@@ -21,6 +21,7 @@ import os
 import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .config import Settings
@@ -51,17 +52,14 @@ class ReplyIn(BaseModel):
     answer: str = Field(..., min_length=1, max_length=2000)
 
 
+WEB_DIR = os.path.join(os.path.dirname(__file__), "web")
+app.mount("/static", StaticFiles(directory=WEB_DIR), name="static")
+
+
 @app.api_route("/", methods=["GET", "HEAD"], response_class=HTMLResponse)
 def index():
-    return """<!doctype html><html><head><meta charset="utf-8"><title>AI Task Worker</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1"></head>
-    <body style="font-family:system-ui;max-width:720px;margin:40px auto;padding:0 16px">
-    <h1>Autonomous AI Task Worker</h1>
-    <p>Backend is running. The web UI is coming next. For now:</p>
-    <ul><li><a href="/docs">API docs (try it from the browser)</a></li>
-    <li><a href="/acme/">The sandbox company the worker operates (Acme Corp)</a></li>
-    <li><a href="/api/examples">Example tasks</a></li>
-    <li><a href="/api/runs">Runs</a></li></ul></body></html>"""
+    with open(os.path.join(WEB_DIR, "index.html")) as f:
+        return HTMLResponse(f.read())
 
 
 @app.get("/api/health")
@@ -89,6 +87,71 @@ async def examples():
         names = {"email_vendor": "Globex Corporation", "portal_vendor": "a supplier", "big_vendor": "a supplier",
                  "new_vendor": "a new supplier"}
     return [e.format(**names) for e in EXAMPLES]
+
+
+CHAOS_HELP = {
+    "transient_503": "First save fails with 503 and is not stored",
+    "ambiguous_502": "First save is stored but answers 502",
+    "lying_ui": "First save shows success but stores nothing",
+    "modal": "A what's-new dialog blocks the ERP",
+    "session_expiry": "ERP sign-in expires mid task",
+    "slow": "ERP pages respond slowly",
+}
+APPS = [{"name": "Mail", "path": "/acme/mail/"}, {"name": "ERP", "path": "/acme/erp/"},
+        {"name": "Supplier portal", "path": "/acme/portal/"}, {"name": "Drive", "path": "/acme/drive/"}]
+
+
+def _admin_headers() -> dict:
+    return {"x-admin-token": os.environ.get("SANDBOX_ADMIN_TOKEN", "")}
+
+
+@app.get("/api/sandbox")
+async def sandbox_info():
+    """World settings for the demo controls. Ground truth is deliberately not included."""
+    try:
+        async with httpx.AsyncClient(timeout=5) as c:
+            st = (await c.get(f"{settings.sandbox_url}/acme/admin/state", headers=_admin_headers())).json()
+        chaos, seed = st.get("chaos") or {}, st["truth"]["seed"]
+    except Exception:
+        chaos, seed = {}, None
+    return {"seed": seed, "chaos": {k: bool(chaos.get(k)) for k in CHAOS_HELP}, "chaos_help": CHAOS_HELP, "apps": APPS}
+
+
+class ResetIn(BaseModel):
+    seed: int = Field(7, ge=0, le=1_000_000)
+    chaos: dict[str, bool] = {}
+
+
+@app.post("/api/sandbox/reset")
+async def sandbox_reset(body: ResetIn):
+    if any(h.task and not h.task.done() for h in manager.runs.values()):
+        raise HTTPException(409, "a task is running; wait for it to finish before rebuilding the company")
+    chaos = {k: (1 if k in ("transient_503", "ambiguous_502", "lying_ui") else True)
+             for k, on in body.chaos.items() if on and k in CHAOS_HELP}
+    async with httpx.AsyncClient(timeout=30) as c:
+        r = await c.post(f"{settings.sandbox_url}/acme/admin/reset", json={"seed": body.seed, "chaos": chaos},
+                         headers=_admin_headers())
+    if r.status_code != 200:
+        raise HTTPException(502, "could not rebuild the sandbox")
+    return {"ok": True, "seed": body.seed, "chaos": {k: k in chaos for k in CHAOS_HELP}}
+
+
+@app.get("/api/graph")
+async def graph_diagram():
+    """The LangGraph structure of the worker, as Mermaid."""
+    from langgraph.graph import END, START, StateGraph
+
+    from .agent.engine import GraphState
+    g = StateGraph(GraphState)
+    for n in ("intake", "act", "human", "verify", "report"):
+        g.add_node(n, lambda st: st)
+    g.add_edge(START, "intake")
+    g.add_conditional_edges("intake", lambda st: st["route"], {"act": "act", "human": "human"})
+    g.add_conditional_edges("act", lambda st: st["route"], {"act": "act", "human": "human", "verify": "verify"})
+    g.add_conditional_edges("human", lambda st: st["route"], {"act": "act", "human": "human"})
+    g.add_conditional_edges("verify", lambda st: st["route"], {"act": "act", "report": "report"})
+    g.add_edge("report", END)
+    return {"mermaid": g.compile().get_graph().draw_mermaid()}
 
 
 @app.post("/api/runs", status_code=201)
@@ -130,10 +193,11 @@ async def run_events(run_id: str, request: Request, after: int = 0):
     async def stream():
         q = manager.subscribe(run_id)
         try:
+            last = after
             for ev in list(h.events):
-                if ev["seq"] > after:
+                if ev["seq"] > last:
+                    last = ev["seq"]
                     yield f"id: {ev['seq']}\nevent: {ev['type']}\ndata: {json.dumps(ev, default=str)}\n\n"
-            last = h.events[-1]["seq"] if h.events else 0
             while True:
                 if await request.is_disconnected():
                     break
@@ -189,6 +253,9 @@ def healthz():
 # hosts). Otherwise the sandbox is a separate process and /acme is reverse proxied.
 EMBED_SANDBOX = os.environ.get("EMBED_SANDBOX", "0") == "1"
 if EMBED_SANDBOX:
+    import secrets as _secrets
+    # The company apps share this origin, so the admin page must never be open by default.
+    os.environ.setdefault("SANDBOX_ADMIN_TOKEN", _secrets.token_hex(12))
     from sandbox import app as sandbox_app
 
     app.include_router(sandbox_app.r)

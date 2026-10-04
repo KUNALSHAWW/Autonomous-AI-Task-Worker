@@ -169,10 +169,23 @@ class Verifier:
             return {k: self._subst(x) for k, x in v.items()}
         return v
 
+    def _subst_url(self, url: str) -> str:
+        from urllib.parse import quote
+
+        def rep(m):
+            f = self.s.facts.get(m.group(1).strip())
+            if f is None:
+                raise KeyError(m.group(1))
+            return quote(str(f.value), safe="")
+        return re.sub(r"\{\{\s*fact:([^}]+)\}\}", rep, url)
+
     async def run_check(self, chk: dict, crit: dict) -> dict:
         kind = chk.get("type")
         try:
-            chk = self._subst(chk)
+            url = chk.get("url")
+            chk = self._subst({k: v for k, v in chk.items() if k != "url"})
+            if url is not None:
+                chk["url"] = self._subst_url(str(url))
         except KeyError as e:
             return {"type": kind, "status": "unknown", "detail": f"check refers to unknown fact {e}"}
         try:
@@ -189,7 +202,8 @@ class Verifier:
                 return await investigate(self.a, crit, chk.get("instructions") or crit["text"])
             return await self.judge(crit, chk.get("instructions") or crit["text"])
         except Exception as e:
-            return {"type": kind, "status": "unknown", "detail": f"check could not run: {type(e).__name__}: {e}"}
+            msg = self.a.env.vault.scrub(str(e).splitlines()[0] if str(e) else "")
+            return {"type": kind, "status": "unknown", "detail": f"check could not run: {type(e).__name__}: {msg}"}
 
     async def check_api(self, chk: dict) -> dict:
         url = str(chk.get("url", ""))
@@ -207,7 +221,7 @@ class Verifier:
                     if m:
                         headers = {"Authorization": "Bearer " + self.a.env.vault.resolve(m.group(1), url)}
         resp = await self.a.browser.context.request.get(url, headers=headers or None, timeout=15000,
-                                                        fail_on_status_code=False)
+                                                        fail_on_status_code=False, max_redirects=0)
         if resp.status >= 400:
             return {"type": "api_record", "status": "unknown", "detail": f"GET {url} returned HTTP {resp.status}"}
         data = json.loads(await resp.text())
@@ -238,7 +252,8 @@ class Verifier:
         res = await self.a.browser.goto(url)
         if not res.view:
             return {"type": "page_text", "status": "unknown", "detail": res.message}
-        page = _norm(res.view.text)
+        from ..tools.toolbox import grounding_text
+        page = _norm(grounding_text(res.view.text))
         missing = [t for t in chk.get("contains") or [] if not any(_norm(v) in page for v in _variants(t))]
         ok = not missing
         return {"type": "page_text", "status": "pass" if ok else "fail", "url": url,

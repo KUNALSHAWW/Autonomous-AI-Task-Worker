@@ -12,7 +12,8 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass, field
-from urllib.parse import urlparse
+import posixpath
+from urllib.parse import unquote, urlparse, urlunparse
 
 from .environment import Environment, origin
 
@@ -55,8 +56,26 @@ def _norm_fields(fields: dict) -> dict:
             for k, v in fields.items()}
 
 
-def fingerprint(method: str, url: str, fields: dict) -> str:
+def canonical(url: str) -> str:
+    """Decode and normalise a URL the way the server will see it, so rules can't be dodged with
+    percent-encoding (/app/%61dmin), doubled slashes or dot segments."""
     p = urlparse(url)
+    path = p.path or "/"
+    for _ in range(3):  # double-encoded paths
+        dec = unquote(path)
+        if dec == path:
+            break
+        path = dec
+    trailing = path.endswith("/")
+    path = re.sub(r"/{2,}", "/", path)
+    path = posixpath.normpath(path) if path not in ("", "/") else "/"
+    if trailing and not path.endswith("/"):
+        path += "/"
+    return urlunparse((p.scheme.lower(), p.netloc.lower(), path, p.params, p.query, ""))
+
+
+def fingerprint(method: str, url: str, fields: dict) -> str:
+    p = urlparse(canonical(url))
     payload = json.dumps(_norm_fields(fields), sort_keys=True)
     return hashlib.sha1(f"{method.upper()} {p.path} {payload}".encode()).hexdigest()[:16]
 
@@ -83,17 +102,18 @@ class Gate:
     def check_navigation(self, url: str) -> Decision:
         if url.startswith(("data:", "about:", "blob:")):
             return Decision("allow")
+        url = canonical(url)
         o = origin(url)
         if self.env.allowed_origins and o not in self.env.allowed_origins:
             return Decision("deny", f"Navigation outside the allowed systems is blocked ({o}).")
         path = urlparse(url).path
         for d in self.env.denied_paths:
-            if path.startswith(d):
+            if path == d.rstrip("/") or path.startswith(d.rstrip("/") + "/"):
                 return Decision("deny", f"Access to {d} is not permitted for the assistant.")
         return Decision("allow")
 
     def note_read(self, url: str) -> None:
-        self.last_read_at[self._app_key(url)] = self._tick()
+        self.last_read_at[self._app_key(canonical(url))] = self._tick()
 
     def _app_key(self, url: str) -> str:
         """Which application a URL belongs to: the manifest app with the longest matching URL prefix."""
@@ -109,7 +129,7 @@ class Gate:
         m = rule.get("match", {})
         if m.get("methods") and method.upper() not in [x.upper() for x in m["methods"]]:
             return False, ""
-        if m.get("url") and not fnmatch.fnmatch(url, m["url"]):
+        if m.get("url") and not fnmatch.fnmatch(canonical(url), m["url"]):
             return False, ""
         cond = rule.get("when")
         if not cond:
@@ -135,10 +155,18 @@ class Gate:
             return False, ""
         return True, ""
 
+    def is_sign_in(self, fields: dict) -> bool:
+        """A request that carries a vault credential is a sign-in, not a change to business data."""
+        secrets = {s["value"] for s in self.env.vault.secrets.values() if s.get("value")}
+        return any(str(v) in secrets for v in fields.values()) and len(fields) <= 6
+
     def check_write(self, method: str, url: str, fields: dict) -> Decision:
+        url = canonical(url)
         nav = self.check_navigation(url)
         if nav.action == "deny":
             return nav
+        if self.is_sign_in(fields):
+            return Decision("allow", "sign-in", fingerprint="sign-in")
         fp = fingerprint(method, url, fields)
         if self.read_only:
             return Decision("deny", "Read-only mode: state-changing requests are not allowed during verification.",
@@ -187,7 +215,9 @@ class Gate:
         self.denials.append((rule_id, key))
 
     def record_write(self, method: str, url: str, fields: dict, fp: str) -> Write:
-        w = Write(len(self.writes) + 1, self.step, method.upper(), url, fields, fp, seq=self._tick())
+        scrub = self.env.vault.scrub
+        clean = {scrub(str(k)): scrub(str(v)) for k, v in fields.items()}
+        w = Write(len(self.writes) + 1, self.step, method.upper(), scrub(url), clean, fp, seq=self._tick())
         self.writes.append(w)
         return w
 

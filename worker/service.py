@@ -62,6 +62,9 @@ class RunManager:
 
     async def _run(self, h: RunHandle) -> None:
         env = load_environment(self.settings.environment_file, self.settings.sandbox_url)
+        if os.environ.get("EMBED_SANDBOX") == "1":
+            # The worker's own API and UI share the origin with the company apps: keep the agent out of them.
+            env.denied_paths += ["/api", "/docs", "/redoc", "/openapi.json", "/static", "/healthz"]
         try:
             llm = self.llm_factory()
         except Exception as e:

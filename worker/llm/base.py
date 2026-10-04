@@ -146,6 +146,11 @@ def coerce_args(schema: dict, args: dict) -> dict:
     out = dict(args)
     for k, v in args.items():
         t = props.get(k, {}).get("type")
+        enum = props.get(k, {}).get("enum")
+        if enum and isinstance(v, str) and v not in enum:
+            match = [e for e in enum if isinstance(e, str) and e.lower() == v.strip().lower()]
+            if match:
+                out[k] = v = match[0]
         if t in ("object", "array") and isinstance(v, str):
             try:
                 parsed = json.loads(v)
@@ -163,3 +168,12 @@ def coerce_args(schema: dict, args: dict) -> dict:
         elif t == "string" and isinstance(v, (int, float)) and not isinstance(v, bool):
             out[k] = str(v)
     return out
+
+
+def tools_prompt(tools: list[ToolSpec]) -> str:
+    """Tool catalogue as text, for models or endpoints without native tool calling."""
+    lines = ["You can use these tools. Reply with ONLY a JSON object of the form "
+             '{"tool": "<tool name>", "args": {...}} to call exactly one of them.', ""]
+    for t in tools:
+        lines.append(f"- {t.name}: {t.description}\n  args schema: {json.dumps(t.parameters)}")
+    return "\n".join(lines)
