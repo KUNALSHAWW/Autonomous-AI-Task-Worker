@@ -65,6 +65,25 @@ class Environment:
     denied_paths: list[str]
     policy: list[dict]
 
+    def auth_headers(self, url: str) -> dict:
+        """Default credentials for an app's API, taken from the manifest's `api` notes
+        (`Authorization: Bearer {{secret:x}}`). Lets API calls work without the model
+        having to remember the header, and without it ever seeing the token."""
+        best = None
+        for app in self.apps:
+            base = app.get("url", "").rstrip("/")
+            if base and url.startswith(base) and (best is None or len(base) > len(best["url"].rstrip("/"))):
+                best = app
+        if not best:
+            return {}
+        m = re.search(r"Authorization:\s*Bearer\s+(\{\{secret:\w+\}\})", best.get("api") or "")
+        if not m:
+            return {}
+        try:
+            return {"Authorization": "Bearer " + self.vault.resolve(m.group(1), url)}
+        except (KeyError, PermissionError):
+            return {}
+
     def describe(self) -> str:
         """Prompt-ready description (placeholders only, no secret values)."""
         out = [f"Environment: {self.name}", self.about.strip(), f"You act on behalf of: {self.user.get('role', '')}", "",

@@ -392,3 +392,7 @@ table.kv tr:last-child td { border-bottom: 0; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+
+.thinking-row { cursor: default; }
+.thinking-row .title { color: var(--text-2); }
+.thinking-row .ico { display: grid; place-items: center; height: 20px; }

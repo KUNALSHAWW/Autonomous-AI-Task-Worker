@@ -60,6 +60,7 @@ function apply(R, ev) {
     case "created": R.task = d.task; R.model = d.model; R.dry = d.dry_run; R.t0 = ev.ts; break;
     case "status":
       R.status = d.status; if (d.outcome) R.outcome = d.outcome;
+      if (d.status !== "running") R.thinking = null;
       if (["done", "failed", "stopped"].includes(d.status)) R.t1 = ev.ts;
       break;
     case "phase":
@@ -72,7 +73,9 @@ function apply(R, ev) {
       R.phase = d.phase;
       break;
     case "contract": R.contract = d.contract; break;
+    case "thinking": R.thinking = ev.ts; break;
     case "step_started":
+      R.thinking = null;
       R.steps[d.n] = { ...d, running: true, ts: ev.ts, phase: R.phase === "verify" ? "verify" : "act" };
       R.items.push({ kind: "step", n: d.n });
       break;
@@ -91,13 +94,13 @@ function apply(R, ev) {
     }
     case "note": R.items.push({ kind: "note", text: d.message }); break;
     case "error": R.error = d.message; R.items.push({ kind: "note", text: d.message, bad: true }); break;
-    case "question": R.pending = d; break;
+    case "question": R.pending = d; R.thinking = null; break;
     case "answer":
       R.items.push({ kind: "msg", who: "You answered", text: d.answer });
       R.pending = null;
       break;
     case "notify": R.items.push({ kind: "msg", who: "Message from the worker", text: d.message }); break;
-    case "claimed": R.claimed = d; break;
+    case "claimed": R.claimed = d; R.thinking = null; break;
     case "check": R.checks.push(d); break;
     case "verification":
       R.verification = d;
@@ -321,10 +324,10 @@ function openRun(id) {
     apply(S.run, ev);
     schedule(ev.type);
   };
-  for (const t of ["created", "status", "phase", "contract", "step_started", "step", "note", "error", "question", "answer", "notify", "claimed", "check", "verification", "report"]) es.addEventListener(t, handle);
+  for (const t of ["created", "status", "phase", "contract", "thinking", "step_started", "step", "note", "error", "question", "answer", "notify", "claimed", "check", "verification", "report"]) es.addEventListener(t, handle);
   es.addEventListener("end", () => { es.close(); loadRuns(); });
   es.onerror = () => { if (S.run && ["done", "failed", "stopped"].includes(S.run.status)) es.close(); };
-  S.timer = setInterval(renderHead, 1000);
+  S.timer = setInterval(tick, 1000);
 }
 
 function closeStream() {
@@ -344,20 +347,42 @@ function schedule(type) {
   });
 }
 
+function elapsed(R) {
+  const end = R.t1 || (["done", "failed", "stopped"].includes(R.status) ? R.t0 : Date.now() / 1000);
+  return R.t0 ? Math.max(0, end - R.t0) : 0;
+}
+
+// Called every second. Only touches text nodes, never replaces buttons: replacing the
+// Stop button under the mouse between mousedown and mouseup swallows the click.
+function tick() {
+  const R = S.run; if (!R) return;
+  const el = $("#elapsed"); if (el) el.textContent = clock(elapsed(R));
+  const th = $("#think-secs");
+  if (th && R.thinking) th.textContent = `${Math.max(0, Math.round(Date.now() / 1000 - R.thinking))}s`;
+}
+
 function renderHead() {
   const R = S.run; if (!R) return;
-  const end = R.t1 || (["done", "failed", "stopped"].includes(R.status) ? R.t0 : Date.now() / 1000);
-  const secs = R.t0 ? Math.max(0, end - R.t0) : 0;
   const steps = Object.values(R.steps).filter((s) => s.phase !== "verify").length;
   const live = ["running", "waiting_for_user", "queued"].includes(R.status);
+  const sig = [R.task, R.status, R.outcome, steps, R.model, R.dry, R.stopping].join("|");
+  if (R._headSig === sig) { tick(); return; }
+  R._headSig = sig;
+  const action = !live ? `<button class="btn" id="again">Run again</button>`
+    : R.stopping ? `<button class="btn ghost" disabled>Stopping</button>`
+    : `<button class="btn ghost danger" id="stop">Stop</button>`;
   $("#run-head").innerHTML = `
     <div class="task"><h1>${esc(R.task || "Loading run")}</h1>
-      <div class="meta"><span>Elapsed <span class="mono">${clock(secs)}</span></span><span>Steps <span class="mono">${steps}</span></span>
+      <div class="meta"><span>Elapsed <span class="mono" id="elapsed">${clock(elapsed(R))}</span></span><span>Steps <span class="mono">${steps}</span></span>
       ${R.model ? `<span>Model <span class="mono">${esc(R.model.split(" @ ")[0])}</span></span>` : ""}${R.dry ? "<span>Rehearsal, nothing is written</span>" : ""}</div></div>
     ${statusBadge(R)}
-    ${live ? `<button class="btn ghost danger" id="stop">Stop</button>` : `<button class="btn" id="again">Run again</button>`}`;
+    ${action}`;
   const stop = $("#stop");
-  if (stop) stop.onclick = async () => { await api(`/api/runs/${R.id}/cancel`, { method: "POST" }).catch(() => {}); };
+  if (stop) stop.onclick = async () => {
+    R.stopping = true; renderHead();
+    try { await api(`/api/runs/${R.id}/cancel`, { method: "POST" }); }
+    catch (e) { R.stopping = false; renderHead(); toast(`Could not stop the run: ${e.message}`); }
+  };
   const again = $("#again");
   if (again) again.onclick = () => { location.hash = "#/"; setTimeout(() => { const t = $("#task"); if (t) t.value = R.task; }, 0); };
 }
@@ -410,6 +435,11 @@ function renderLedger() {
       <span class="what"><span class="title">${esc(titleFor(st))}</span><span class="how">${esc(how(st))}</span></span>
       <span class="st">${glyph}</span></button>
       ${R.open.has(st.n) ? `<div class="step-detail">${esc(st.summary || "")}${st.observation ? `<pre>${esc(st.observation)}</pre>` : ""}</div>` : ""}</li>`);
+  }
+  if (R.thinking && R.status === "running") {
+    const t = R.t0 ? clock(Math.max(0, R.thinking - R.t0)) : "";
+    rows.push(`<li><div class="step run thinking-row"><span class="when">${t}</span><span class="ico"><span class="pulse"></span></span>
+      <span class="what"><span class="title">Deciding the next step</span><span class="how">waiting for the model <span id="think-secs">0s</span></span></span><span class="st"></span></div></li>`);
   }
   $("#ledger").innerHTML = rows.join("");
   if (nearBottom && R.follow) box.scrollTop = box.scrollHeight;

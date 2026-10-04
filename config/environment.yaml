@@ -8,6 +8,11 @@ name: Acme Corp (sandbox)
 about: >
   Acme Corp is a mid-sized company. You work as a digital assistant for the
   finance team, mostly accounts payable. Today's date is {today}.
+
+  Where things usually are: supplier invoices arrive in the Mail app as PDF
+  attachments. A supplier that no longer emails invoices sends a notification
+  email pointing to its portal instead. Bills and vendors live in the ERP (its
+  API is the quickest way to look things up). Policies and contacts are on the Drive.
 user:
   name: AP team member
   role: Accounts payable specialist at Acme Corp
@@ -24,7 +29,7 @@ apps:
     about: AcmeERP, the system of record for vendors and bills (payables). Requires sign in.
     login: {username: "{{secret:erp_username}}", password: "{{secret:erp_password}}"}
     api: |
-      Docs at ${SANDBOX_URL}/acme/erp/api . Authenticate with header Authorization: Bearer {{secret:erp_api_token}}
+      Docs at ${SANDBOX_URL}/acme/erp/api . Authorization: Bearer {{secret:erp_api_token}} (added automatically by http_request)
       GET ${SANDBOX_URL}/acme/erp/api/vendors?q=<name>
       GET ${SANDBOX_URL}/acme/erp/api/bills?vendor=<name>&invoice_number=<supplier invoice no>&status=
       GET ${SANDBOX_URL}/acme/erp/api/bills/<bill number>

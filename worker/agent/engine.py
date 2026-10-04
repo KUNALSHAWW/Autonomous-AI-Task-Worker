@@ -313,6 +313,7 @@ class Agent:
             return {"route": "verify", "pending": None}
         messages = [{"role": "system", "content": prompts.ACT_SYSTEM.format(environment=self.env_text)},
                     {"role": "user", "content": self._turn_prompt()}]
+        await self.emit("thinking", {"n": len(s.steps) + 1})
         reply = await self.llm_call(messages, tools=[TOOL_SPECS[n] for n in ACT_TOOLS], purpose="act",
                                     max_tokens=4000)
         call = reply.tool_call

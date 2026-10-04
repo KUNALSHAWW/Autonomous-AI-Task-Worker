@@ -97,3 +97,14 @@ async def test_typed_values_are_not_evidence_and_ambiguous_options_are_reported(
         assert r.error_kind == "ungrounded"
     finally:
         await b.close()
+
+
+async def test_api_calls_get_the_manifest_credentials_automatically(sandbox):
+    reset(sandbox, seed=45)
+    st, gate, b, tb = await _box(sandbox)
+    try:
+        r = await tb.run("http_request", {"method": "GET", "url": f"{sandbox}/acme/erp/api/bills"}, 1)
+        assert r.ok and "HTTP 200" in r.output, r.output  # no Authorization header given by the model
+        assert "erp_tok_" not in r.output  # and the token itself never shows up
+    finally:
+        await b.close()

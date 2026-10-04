@@ -45,8 +45,8 @@ TOOL_SPECS: dict[str, ToolSpec] = {t.name: t for t in [
     ToolSpec("read_file", "Read a downloaded file (PDF, CSV, text) from your workspace, e.g. 'files/INV-1.pdf'. "
                           "Use path='' to list files.",
              _schema({"path": {"type": "string"}, "part": {"type": "integer"}}, [])),
-    ToolSpec("http_request", "Call an HTTP/JSON API of one of the company systems. Shares the browser's login session. "
-                             "Use {{secret:name}} placeholders for credentials in headers.",
+    ToolSpec("http_request", "Call an HTTP/JSON API of one of the company systems. Shares the browser's login session, and "
+                             "API credentials listed for that app are added automatically.",
              _schema({"method": {"type": "string", "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"]},
                       "url": {"type": "string"}, "body": {"type": "object"}, "headers": {"type": "object"}},
                      ["method", "url"])),
@@ -232,6 +232,8 @@ class Toolbox:
         nav = self.gate.check_navigation(real_url)
         if nav.action == "deny":
             return ToolResult(False, f"BLOCKED: {nav.message}", "blocked")
+        if not any(k.lower() == "authorization" for k in real_headers):
+            real_headers.update(self.env.auth_headers(real_url))
         write = None
         if method not in SAFE_METHODS:
             decision = self.gate.check_write(method, real_url, real_body or {})

@@ -216,11 +216,7 @@ class Verifier:
             return {"type": "api_record", "status": "unknown", "detail": f"url not allowed: {url}"}
         headers = {k: self.a.env.vault.resolve(str(v), url) for k, v in (chk.get("headers") or {}).items()}
         if not headers:
-            for app in self.a.env.apps:
-                if "Bearer" in (app.get("api") or "") and url.startswith(app["url"].rstrip("/")):
-                    m = re.search(r"Bearer (\{\{secret:\w+\}\})", app["api"])
-                    if m:
-                        headers = {"Authorization": "Bearer " + self.a.env.vault.resolve(m.group(1), url)}
+            headers = self.a.env.auth_headers(url)
         resp = await self.a.browser.context.request.get(url, headers=headers or None, timeout=15000,
                                                         fail_on_status_code=False, max_redirects=0)
         if resp.status >= 400:
