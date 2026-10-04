@@ -1,0 +1,75 @@
+# Everything the worker knows about the company it works for lives in this file.
+# Think of it as the onboarding doc a new hire gets on day one: which tools
+# exist, where they are, which logins to use and which rules are non-negotiable.
+# The agent code itself is generic. Point WORKER_ENVIRONMENT at a different file
+# to put the same worker in front of a different set of systems.
+
+name: Acme Corp (sandbox)
+about: >
+  Acme Corp is a mid-sized company. You work as a digital assistant for the
+  finance team, mostly accounts payable. Today's date is {today}.
+user:
+  name: AP team member
+  role: Accounts payable specialist at Acme Corp
+
+apps:
+  - name: Mail
+    url: ${SANDBOX_URL}/acme/mail/
+    about: Shared accounts payable mailbox (ap@acme.example). Supplier emails, attachments, compose and send.
+    api: |
+      GET ${SANDBOX_URL}/acme/mail/api/messages?folder=inbox|sent&q=<text>  -> JSON list of messages with attachment urls
+      POST ${SANDBOX_URL}/acme/mail/api/send  JSON {to, cc, subject, body}
+  - name: ERP
+    url: ${SANDBOX_URL}/acme/erp/
+    about: AcmeERP, the system of record for vendors and bills (payables). Requires sign in.
+    login: {username: "{{secret:erp_username}}", password: "{{secret:erp_password}}"}
+    api: |
+      Docs at ${SANDBOX_URL}/acme/erp/api . Authenticate with header Authorization: Bearer {{secret:erp_api_token}}
+      GET ${SANDBOX_URL}/acme/erp/api/vendors?q=<name>
+      GET ${SANDBOX_URL}/acme/erp/api/bills?vendor=<name>&invoice_number=<supplier invoice no>&status=
+      GET ${SANDBOX_URL}/acme/erp/api/bills/<bill number>
+      POST ${SANDBOX_URL}/acme/erp/api/bills  JSON {vendor, invoice_number, invoice_date (YYYY-MM-DD), due_date (YYYY-MM-DD), amount ("1234.56"), currency, memo}
+  - name: Drive
+    url: ${SANDBOX_URL}/acme/drive/
+    about: Shared finance drive with policies, contacts and spreadsheets.
+  - name: Supplier portal
+    url: ${SANDBOX_URL}/acme/portal/
+    about: Customer billing portal of one of our suppliers. Some suppliers publish invoices here instead of emailing them.
+    login: {username: "{{secret:portal_username}}", password: "{{secret:portal_password}}"}
+
+# Secrets are injected only at execution time and only on the listed origins.
+# The model sees the placeholder, never the value.
+secrets:
+  erp_username: {env: ERP_USERNAME, default: "ap.assistant", origins: ["${SANDBOX_URL}"]}
+  erp_password: {env: ERP_PASSWORD, default: "Ledger!2026", origins: ["${SANDBOX_URL}"]}
+  erp_api_token: {env: ERP_API_TOKEN, default: "erp_tok_7f3c9a1e5d", origins: ["${SANDBOX_URL}"]}
+  portal_username: {env: PORTAL_USERNAME, default: "acme-ap", origins: ["${SANDBOX_URL}"]}
+  portal_password: {env: PORTAL_PASSWORD, default: "Portal#4821", origins: ["${SANDBOX_URL}"]}
+
+network:
+  allowed_origins: ["${SANDBOX_URL}"]
+  denied_paths: ["/acme/admin"]
+
+# Hard guardrails, enforced in code on every state-changing request no matter
+# what the model decides. Field patterns are matched against form labels and
+# JSON keys, so they survive UI wording changes.
+policy:
+  - id: high_value_entry
+    description: Entries with an amount at or above 10,000 need finance manager approval (AP policy rule 2).
+    match: {url: "*/acme/erp/*bills*"}
+    when: {field: "amount|total|payable", gte: 10000}
+    action: require_approval
+  - id: bank_detail_change
+    description: Changing bank details of an existing vendor is high risk (AP policy rule 3).
+    match: {url: "*/acme/erp/vendors/*/bank*"}
+    action: require_approval
+  - id: new_vendor_with_bank
+    description: Creating a vendor with bank details needs approval (AP policy rule 4).
+    match: {url: "*/acme/erp/vendors/new*"}
+    when: {field: "bank", present: true}
+    action: require_approval
+  - id: external_email
+    description: Emails to addresses outside acme.example leave the company and need approval.
+    match: {url: "*/acme/mail/*send*"}
+    when: {field: "^to$|^cc$", not_contains_only: "@acme.example"}
+    action: require_approval
