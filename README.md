@@ -58,6 +58,17 @@ docker build -t ai-task-worker .
 docker run -p 7860:7860 -e GEMINI_API_KEY=... ai-task-worker
 ```
 
+## Live deployment
+
+Render (free plan): https://ai-task-worker-ico9.onrender.com
+
+- The free instance sleeps when idle, so the first request takes about a minute.
+- It runs in single-process mode (`EMBED_SANDBOX=1`) and one task at a time to fit in 512 MB.
+- The sandbox admin page needs `?token=<SANDBOX_ADMIN_TOKEN>`, which is set in the Render dashboard.
+- An LLM key (`GEMINI_API_KEY`) must be set in the Render dashboard under Environment.
+
+See [docs/demo.md](docs/demo.md) for a five minute demo script.
+
 ## Models
 
 Any OpenAI-compatible endpoint works, plus native Anthropic. Pick one with environment variables:
