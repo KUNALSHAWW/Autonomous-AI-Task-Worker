@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 
 PROVIDER_PRESETS = {
     # Default: ChatOllama. With OLLAMA_API_KEY it talks to Ollama Cloud, without it to a local Ollama.
-    "ollama": ("", "OLLAMA_API_KEY", "gpt-oss:120b"),
+    "ollama": ("", "OLLAMA_API_KEY", "gemma4:31b"),
     "gemini": ("https://generativelanguage.googleapis.com/v1beta/openai", "GEMINI_API_KEY", "gemini-2.5-flash"),
     "groq": ("https://api.groq.com/openai/v1", "GROQ_API_KEY", "openai/gpt-oss-120b"),
     "openrouter": ("https://openrouter.ai/api/v1", "OPENROUTER_API_KEY", "qwen/qwen3-235b-a22b:free"),

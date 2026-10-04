@@ -20,7 +20,7 @@ PORT = 8420
 BASE = f"http://127.0.0.1:{PORT}"
 TMP = tempfile.mkdtemp()
 os.environ.update({"EMBED_SANDBOX": "1", "SANDBOX_URL": BASE, "RUNS_DIR": os.path.join(TMP, "runs"),
-                   "SANDBOX_DB": os.path.join(TMP, "sandbox.db"), "OLLAMA_MODEL": "gpt-oss:120b",
+                   "SANDBOX_DB": os.path.join(TMP, "sandbox.db"), "OLLAMA_MODEL": "gemma4:31b",
                    "OLLAMA_API_KEY": "screenshot-placeholder"})
 sys.path[:0] = [ROOT, os.path.join(ROOT, "tests")]
 

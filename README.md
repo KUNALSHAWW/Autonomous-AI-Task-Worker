@@ -58,7 +58,7 @@ python -m playwright install chromium     # skip if you already have a Playwrigh
 
 cp .env.example .env                      # then put your key and model in it, or export them:
 export OLLAMA_API_KEY=...                 # from ollama.com (Ollama Cloud)
-export OLLAMA_MODEL=gpt-oss:120b          # any tool-calling model you have access to
+export OLLAMA_MODEL=gemma4:31b            # any tool-calling model you have access to
 
 python -m worker serve                    # sandbox company on :8100, console and API on :8000
 ```
@@ -88,7 +88,7 @@ Vendor names are randomized per seed, so `GET /api/examples` returns valid tasks
 
 ```bash
 docker build -t ai-task-worker .
-docker run -p 7860:7860 -e OLLAMA_API_KEY=... -e OLLAMA_MODEL=gpt-oss:120b ai-task-worker
+docker run -p 7860:7860 -e OLLAMA_API_KEY=... -e OLLAMA_MODEL=gemma4:31b ai-task-worker
 ```
 
 ## Live deployment
@@ -107,7 +107,7 @@ ChatOllama (`langchain-ollama`) is the default. Other providers still work if yo
 
 | Provider | Env vars | Default model |
 |---|---|---|
-| **Ollama Cloud (default)** | `OLLAMA_API_KEY`, `OLLAMA_MODEL` | `gpt-oss:120b` |
+| **Ollama Cloud (default)** | `OLLAMA_API_KEY`, `OLLAMA_MODEL` | `gemma4:31b` |
 | Ollama local | `OLLAMA_BASE_URL=http://localhost:11434`, `OLLAMA_MODEL` | |
 | Google Gemini | `LLM_PROVIDER=gemini`, `GEMINI_API_KEY` | `gemini-2.5-flash` |
 | Groq | `LLM_PROVIDER=groq`, `GROQ_API_KEY` | `openai/gpt-oss-120b` |
