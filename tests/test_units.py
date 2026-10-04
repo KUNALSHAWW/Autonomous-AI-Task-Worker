@@ -110,3 +110,12 @@ def test_world_is_deterministic_and_varied():
         for name, inv in w.truth["latest"].items():
             if name != big:
                 assert float(inv["amount"]) < 10000
+
+
+def test_gate_information_only_task_asks_before_writing():
+    g = Gate(_env([]))
+    g.info_only = True
+    d = g.check_write("POST", "http://ok.test/things/new", {"a": "1"})
+    assert d.action == "approval" and d.rule["id"] == "information_only_task"
+    g.grant(d.rule["id"], d.rule["_key"])
+    assert g.check_write("POST", "http://ok.test/things/new", {"a": "1"}).action == "allow"

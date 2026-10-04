@@ -156,6 +156,7 @@ class Agent:
         if not c.checklist:
             c.checklist = [ChecklistItem("c1", c.goal)]
         s.contract = c
+        self.gate.info_only = c.read_only_task
         await self.emit("contract", {"contract": s.to_dict()["contract"]})
         for q in c.questions:
             ans = await self.pause(Pending(id=f"intake{len(c.clarifications) + 1}", kind="clarification", question=q))

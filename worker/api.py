@@ -51,7 +51,7 @@ class ReplyIn(BaseModel):
     answer: str = Field(..., min_length=1, max_length=2000)
 
 
-@app.get("/", response_class=HTMLResponse)
+@app.api_route("/", methods=["GET", "HEAD"], response_class=HTMLResponse)
 def index():
     return """<!doctype html><html><head><meta charset="utf-8"><title>AI Task Worker</title>
     <meta name="viewport" content="width=device-width, initial-scale=1"></head>

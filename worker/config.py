@@ -37,6 +37,8 @@ class Settings:
     base_url: str = field(default_factory=lambda: _env("LLM_BASE_URL"))
     api_key: str = field(default_factory=lambda: _env("LLM_API_KEY"))
     native_tools: bool = field(default_factory=lambda: _env("LLM_NATIVE_TOOLS", "1") != "0")
+    # Extra JSON merged into every request body, e.g. '{"reasoning_effort": "low"}'
+    extra_body: str = field(default_factory=lambda: _env("LLM_EXTRA_BODY"))
 
     environment_file: str = field(default_factory=lambda: _env(
         "WORKER_ENVIRONMENT", os.path.join(os.path.dirname(__file__), "..", "config", "environment.yaml")))
@@ -67,4 +69,7 @@ def make_llm(s: Settings):
         raise RuntimeError(
             f"No API key for provider '{s.provider}'. Set {PROVIDER_PRESETS.get(s.provider, ('', 'LLM_API_KEY'))[1]} "
             f"or LLM_API_KEY (see README).")
-    return OpenAICompatLLM(base, key or "ollama", model, native_tools=s.native_tools)
+    import json
+
+    extra = json.loads(s.extra_body) if s.extra_body else None
+    return OpenAICompatLLM(base, key or "ollama", model, native_tools=s.native_tools, extra_body=extra)

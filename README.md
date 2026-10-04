@@ -84,7 +84,7 @@ Any OpenAI-compatible endpoint works, plus native Anthropic. Pick one with envir
 | Ollama (local) | `LLM_PROVIDER=ollama` | `qwen3:8b` |
 | Anything else | `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL` | |
 
-`LLM_MODEL` overrides the default for any provider. `LLM_NATIVE_TOOLS=0` switches to plain JSON replies for models with weak tool calling. A step costs about 2k prompt tokens, so free tiers are enough for demos.
+`LLM_MODEL` overrides the default for any provider. `LLM_EXTRA_BODY` adds provider-specific JSON to every request (for Gemini, `{"reasoning_effort": "low"}` makes steps faster). `LLM_NATIVE_TOOLS=0` switches to plain JSON replies for models with weak tool calling. A step costs about 2k prompt tokens, so free tiers are enough for demos.
 
 ## Architecture in one picture
 

@@ -66,6 +66,7 @@ class Gate:
         self.env = env
         self.dry_run = dry_run
         self.read_only = False
+        self.info_only = False  # set when intake decides the task only asks for information
         self.grants: list[tuple[str, str]] = []  # (rule id, approval key)
         self.denials: list[tuple[str, str]] = []
         self.writes: list[Write] = []
@@ -168,6 +169,13 @@ class Gate:
             if (rule["id"], key) not in self.grants:
                 return Decision("approval", f"Policy '{rule['id']}': {rule.get('description', '')} [{detail}]",
                                 {**rule, "_key": key}, fp)
+        if self.info_only:
+            rule = {"id": "information_only_task", "description": "The task was understood as a question, but this "
+                    "action would change data.", "_key": f"information_only_task:{fp}"}
+            if ("information_only_task", rule["_key"]) in self.denials:
+                return Decision("deny", "The user declined this change. Do not attempt it again.", rule, fp)
+            if ("information_only_task", rule["_key"]) not in self.grants:
+                return Decision("approval", "Information-only task: this action would change data.", rule, fp)
         if self.dry_run:
             return Decision("dry_run", "Dry run: the request was recorded but not sent.", fingerprint=fp)
         return Decision("allow", fingerprint=fp)
