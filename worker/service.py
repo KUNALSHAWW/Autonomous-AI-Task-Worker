@@ -11,7 +11,7 @@ from typing import Awaitable, Callable
 
 from .agent.engine import Agent
 from .agent.state import Pending, RunState
-from .config import Settings, make_llm
+from .config import Settings, make_chat_model, make_llm
 from .environment import load_environment
 
 AutoAnswer = Callable[[Pending, RunState], Awaitable[str | None]]
@@ -29,9 +29,13 @@ class RunHandle:
 
 
 class RunManager:
-    def __init__(self, settings: Settings | None = None, llm_factory=None, auto_answer: AutoAnswer | None = None):
+    def __init__(self, settings: Settings | None = None, llm_factory=None, auto_answer: AutoAnswer | None = None,
+                 chat_model_factory=None):
         self.settings = settings or Settings()
         self.llm_factory = llm_factory or (lambda: make_llm(self.settings))
+        # LangChain model for the deep-agent investigator; scripted test runs pass none.
+        self.chat_model_factory = chat_model_factory or (
+            (lambda: make_chat_model(self.settings)) if llm_factory is None else (lambda: None))
         self.auto_answer = auto_answer
         self.runs: dict[str, RunHandle] = {}
         # Each run owns a Chromium; cap how many run at once (small hosts: 1). Extra runs queue.
@@ -69,8 +73,13 @@ class RunManager:
         if self.slots.locked():
             await self.emit(h, "note", {"message": "Waiting for a free worker slot (another task is running)."})
         async with self.slots:
+            try:
+                chat_model = self.chat_model_factory()
+            except Exception:
+                chat_model = None
             agent = Agent(h.state, llm, env, self.settings, h.workdir,
-                          emit=lambda t, d: self.emit(h, t, d), ask_user=lambda p: self._ask(h, p))
+                          emit=lambda t, d: self.emit(h, t, d), ask_user=lambda p: self._ask(h, p),
+                          chat_model=chat_model)
             await agent.run()
 
     async def emit(self, h: RunHandle, type_: str, data: dict) -> None:

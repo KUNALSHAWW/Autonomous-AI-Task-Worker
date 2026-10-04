@@ -184,6 +184,9 @@ class Verifier:
                 msgs = self.s.messages_to_user
                 return {"type": kind, "status": "pass" if msgs else "fail",
                         "detail": msgs[-1]["message"][:200] if msgs else "the user was never sent a message"}
+            if getattr(self.a, "chat_model", None) is not None:
+                from .investigator import investigate
+                return await investigate(self.a, crit, chk.get("instructions") or crit["text"])
             return await self.judge(crit, chk.get("instructions") or crit["text"])
         except Exception as e:
             return {"type": kind, "status": "unknown", "detail": f"check could not run: {type(e).__name__}: {e}"}

@@ -73,7 +73,8 @@ async def health():
     except httpx.HTTPError:
         ok = False
     base, key, model = settings.resolved()
-    return {"ok": True, "sandbox": ok, "provider": settings.provider, "model": model, "llm_configured": bool(key)}
+    return {"ok": True, "sandbox": ok, "provider": settings.provider, "model": model,
+            "llm_configured": settings.llm_configured}
 
 
 @app.get("/api/examples")
