@@ -115,6 +115,8 @@ ChatOllama (`langchain-ollama`) is the default. Other providers still work if yo
 | Anthropic | `LLM_PROVIDER=anthropic`, `ANTHROPIC_API_KEY` | `claude-sonnet-4-5` |
 | Anything OpenAI-compatible | `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL` | |
 
+**Thinking.** Every step is a model call, so thinking time adds up fast. `OLLAMA_THINK` defaults to `false` (gpt-oss can't switch it off, so it runs at its lowest level). Set `low`, `medium` or `high` for harder tasks, or `default` to leave it to the model.
+
 If a model or endpoint rejects native tool calling, the client switches to text tool calls for the rest of the run and puts the tool catalogue in the prompt. `LLM_NATIVE_TOOLS=0` forces that mode. A step costs about 2k prompt tokens.
 
 ## Architecture
