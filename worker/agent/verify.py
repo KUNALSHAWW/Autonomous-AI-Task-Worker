@@ -17,6 +17,7 @@ the gate for the whole verification phase.
 from __future__ import annotations
 
 import json
+import os
 import re
 
 from ..llm.base import ToolSpec, coerce_args, validate_args
@@ -197,7 +198,7 @@ class Verifier:
                 msgs = self.s.messages_to_user
                 return {"type": kind, "status": "pass" if msgs else "fail",
                         "detail": msgs[-1]["message"][:200] if msgs else "the user was never sent a message"}
-            if getattr(self.a, "chat_model", None) is not None:
+            if getattr(self.a, "chat_model", None) is not None and os.environ.get("DEEP_INVESTIGATOR", "1") != "0":
                 from .investigator import investigate
                 return await investigate(self.a, crit, chk.get("instructions") or crit["text"])
             return await self.judge(crit, chk.get("instructions") or crit["text"])

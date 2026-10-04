@@ -97,7 +97,7 @@ Render, free plan: https://ai-task-worker-ico9.onrender.com
 
 - **Required:** set `OLLAMA_API_KEY` and `OLLAMA_MODEL` in the Render dashboard under Environment.
 - **Cold starts:** the free instance sleeps when idle, so the first request takes about a minute.
-- **Memory:** it runs in single-process mode (`EMBED_SANDBOX=1`) and one task at a time, to fit in 512 MB.
+- **Memory:** it runs in single-process mode (`EMBED_SANDBOX=1`) and one task at a time, to fit in 512 MB. The Deep Agents investigator loads only when a check needs it. If memory is ever tight, `DEEP_INVESTIGATOR=0` swaps in the lighter built-in read-only judge.
 
 See [docs/demo.md](docs/demo.md) for a five minute demo script.
 
