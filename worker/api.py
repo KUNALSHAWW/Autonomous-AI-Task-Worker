@@ -178,13 +178,29 @@ async def run_file(run_id: str, path: str):
     return FileResponse(full)
 
 
-# ---------------------------------------------------------------------- sandbox proxy
+@app.get("/healthz")
+def healthz():
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------- sandbox
+# EMBED_SANDBOX=1 serves the company apps from this process (saves memory on small
+# hosts). Otherwise the sandbox is a separate process and /acme is reverse proxied.
+EMBED_SANDBOX = os.environ.get("EMBED_SANDBOX", "0") == "1"
+if EMBED_SANDBOX:
+    from sandbox import app as sandbox_app
+
+    app.include_router(sandbox_app.r)
+
+    @app.on_event("startup")
+    def _seed_sandbox():
+        sandbox_app._startup()
+
 _proxy = httpx.AsyncClient(base_url=settings.sandbox_url, timeout=30, follow_redirects=False)
 HOP = {"connection", "keep-alive", "transfer-encoding", "te", "trailer", "upgrade", "content-length",
        "content-encoding", "host"}
 
 
-@app.api_route("/acme/{path:path}", methods=["GET", "POST"])
 async def sandbox_proxy(path: str, request: Request):
     headers = {k: v for k, v in request.headers.items() if k.lower() not in HOP}
     try:
@@ -197,3 +213,7 @@ async def sandbox_proxy(path: str, request: Request):
     for c in r.headers.get_list("set-cookie"):
         out.headers.append("set-cookie", c)
     return out
+
+
+if not EMBED_SANDBOX:
+    app.add_api_route("/acme/{path:path}", sandbox_proxy, methods=["GET", "POST"], include_in_schema=False)

@@ -34,6 +34,8 @@ class RunManager:
         self.llm_factory = llm_factory or (lambda: make_llm(self.settings))
         self.auto_answer = auto_answer
         self.runs: dict[str, RunHandle] = {}
+        # Each run owns a Chromium; cap how many run at once (small hosts: 1). Extra runs queue.
+        self.slots = asyncio.Semaphore(int(os.environ.get("MAX_CONCURRENT_RUNS", "2")))
         os.makedirs(self.settings.runs_dir, exist_ok=True)
 
     # ------------------------------------------------------------------ lifecycle
@@ -64,9 +66,12 @@ class RunManager:
             await self.emit(h, "status", {"status": "failed", "outcome": "failed"})
             return
         await self.emit(h, "created", {"task": h.state.task, "dry_run": h.state.dry_run, "model": llm.name})
-        agent = Agent(h.state, llm, env, self.settings, h.workdir,
-                      emit=lambda t, d: self.emit(h, t, d), ask_user=lambda p: self._ask(h, p))
-        await agent.run()
+        if self.slots.locked():
+            await self.emit(h, "note", {"message": "Waiting for a free worker slot (another task is running)."})
+        async with self.slots:
+            agent = Agent(h.state, llm, env, self.settings, h.workdir,
+                          emit=lambda t, d: self.emit(h, t, d), ask_user=lambda p: self._ask(h, p))
+            await agent.run()
 
     async def emit(self, h: RunHandle, type_: str, data: dict) -> None:
         ev = {"seq": len(h.events) + 1, "ts": round(time.time(), 3), "run_id": h.state.id, "type": type_, "data": data}

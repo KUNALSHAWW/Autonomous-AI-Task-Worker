@@ -4,7 +4,9 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
     HEADLESS=1 \
-    PORT=7860
+    PORT=7860 \
+    EMBED_SANDBOX=1 \
+    MAX_CONCURRENT_RUNS=1
 
 WORKDIR /app
 COPY requirements.txt .

@@ -2,7 +2,7 @@ services:
   - type: web
     name: ai-task-worker
     runtime: docker
-    plan: starter        # Chromium + two small Python processes need more than the free 512 MB
+    plan: free           # fits in 512 MB with EMBED_SANDBOX=1 and one run at a time
     healthCheckPath: /api/health
     envVars:
       - key: LLM_PROVIDER

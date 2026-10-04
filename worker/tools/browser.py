@@ -74,8 +74,12 @@ class BrowserSession:
         exe = os.environ.get("CHROMIUM_PATH") or None
         self._browser = await self._pw.chromium.launch(
             headless=self.headless, executable_path=exe,
-            args=["--disable-dev-shm-usage", "--no-sandbox", "--disable-gpu"])
-        self.context = await self._browser.new_context(accept_downloads=True, viewport={"width": 1280, "height": 900})
+            args=["--disable-dev-shm-usage", "--no-sandbox", "--disable-gpu", "--disable-extensions",
+                  "--no-zygote", "--renderer-process-limit=1", "--js-flags=--max-old-space-size=128",
+                  "--disable-features=site-per-process,IsolateOrigins,Translate,MediaRouter",
+                  "--disable-site-isolation-trials",
+                  "--disable-background-networking", "--mute-audio"])
+        self.context = await self._browser.new_context(accept_downloads=True, viewport={"width": 1200, "height": 850})
         self.context.set_default_timeout(8000)
         await self.context.route("**/*", self._route)
         self.page = await self.context.new_page()

@@ -47,9 +47,13 @@ def start_sandbox(port: int) -> subprocess.Popen | None:
 def cmd_serve(args) -> None:
     import uvicorn
 
-    port = int(os.environ.get("SANDBOX_PORT", "8100"))
-    os.environ.setdefault("SANDBOX_URL", f"http://127.0.0.1:{port}")
-    proc = start_sandbox(port)
+    if os.environ.get("EMBED_SANDBOX") == "1":
+        os.environ.setdefault("SANDBOX_URL", f"http://127.0.0.1:{args.port}")
+        proc = None
+    else:
+        port = int(os.environ.get("SANDBOX_PORT", "8100"))
+        os.environ.setdefault("SANDBOX_URL", f"http://127.0.0.1:{port}")
+        proc = start_sandbox(port)
     try:
         uvicorn.run("worker.api:app", host=args.host, port=args.port, log_level="info")
     finally:
