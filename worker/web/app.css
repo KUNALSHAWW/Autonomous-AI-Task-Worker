@@ -396,3 +396,7 @@ table.kv tr:last-child td { border-bottom: 0; }
 .thinking-row { cursor: default; }
 .thinking-row .title { color: var(--text-2); }
 .thinking-row .ico { display: grid; place-items: center; height: 20px; }
+.frame pre.doc {
+  margin: 0; padding: 14px 16px; max-height: 560px; overflow: auto; background: var(--well);
+  font: 11.5px/1.6 var(--mono); color: var(--text-2); white-space: pre-wrap; word-break: break-word;
+}

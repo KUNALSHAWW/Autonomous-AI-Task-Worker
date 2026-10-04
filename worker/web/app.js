@@ -89,7 +89,7 @@ function apply(R, ev) {
       if (d.tool === "update_plan" && R.contract && d.args && d.args.done) {
         for (const it of R.contract.checklist) if (d.args.done.includes(it.id)) it.done = true;
       }
-      if (R.follow && d.screenshot) R.selected = d.n;
+      if (R.follow && VIEW_TOOLS.has(d.tool)) R.selected = d.n;
       break;
     }
     case "note": R.items.push({ kind: "note", text: d.message }); break;
@@ -484,7 +484,11 @@ async function answer(value) {
 }
 
 /* ------------------------------------------------------------------ evidence pane */
-function shotSteps(R) { return Object.values(R.steps).filter((s) => s.screenshot).sort((a, b) => a.n - b.n); }
+// Steps that show something: browser pages, API responses and files the worker read.
+const VIEW_TOOLS = new Set(["browser_goto", "browser_click", "browser_fill_form", "browser_read", "http_request", "read_file"]);
+function shotSteps(R) {
+  return Object.values(R.steps).filter((s) => !s.running && VIEW_TOOLS.has(s.tool)).sort((a, b) => a.n - b.n);
+}
 
 function renderEvidence() {
   const R = S.run; if (!R) return;
@@ -502,17 +506,32 @@ function renderEvidence() {
 
 function paneScreen(R) {
   const shots = shotSteps(R);
-  if (!shots.length) return `<div class="frame"><div class="chrome"><span class="app">Browser</span><span class="url">about:blank</span></div><div class="blank">${R.status === "running" ? "The browser view appears with the first page the worker opens." : "No screens were captured in this run."}</div></div>`;
+  if (!shots.length) return `<div class="frame"><div class="chrome"><span class="app">Browser</span><span class="url">about:blank</span></div><div class="blank">${R.status === "running" ? "Pages, API responses and files appear here as the worker uses them." : "Nothing was opened in this run."}</div></div>`;
   let st = R.steps[R.selected];
-  if (!st || !st.screenshot) st = shots[shots.length - 1];
+  if (!st || !VIEW_TOOLS.has(st.tool) || st.running) st = shots[shots.length - 1];
   const idx = shots.indexOf(st);
-  const src = `/api/runs/${encodeURIComponent(R.id)}/files/shots/${encodeURIComponent(st.screenshot)}`;
-  return `<div class="frame">
-    <div class="chrome"><span class="app">${esc(appFor(st.url))}</span><span class="url" title="${esc(st.url)}">${esc(st.url)}</span>
-      <span class="nav"><button class="btn ghost" data-shot="prev" aria-label="Previous screen" ${idx <= 0 ? "disabled" : ""}>${ICON.prev}</button>
+  const a = st.args || {};
+  const nav = `<span class="nav"><button class="btn ghost" data-shot="prev" aria-label="Previous" ${idx <= 0 ? "disabled" : ""}>${ICON.prev}</button>
       <span>${idx + 1} / ${shots.length}</span>
-      <button class="btn ghost" data-shot="next" aria-label="Next screen" ${idx >= shots.length - 1 ? "disabled" : ""}>${ICON.next}</button></span></div>
-    <img src="${src}" alt="Screen after step ${st.n}: ${esc(titleFor(st))}" loading="lazy"></div>
+      <button class="btn ghost" data-shot="next" aria-label="Next" ${idx >= shots.length - 1 ? "disabled" : ""}>${ICON.next}</button></span>`;
+  const blankPage = !st.url || st.url.startsWith("about:");
+  let label, where, body;
+  if (st.tool === "http_request") {
+    label = `API, ${appFor(a.url)}`; where = `${a.method || "GET"} ${shortUrl(a.url)}`;
+    body = `<pre class="doc">${esc(st.observation || st.summary || "")}</pre>`;
+  } else if (st.tool === "read_file") {
+    label = "File"; where = a.path || "workspace files";
+    body = `<pre class="doc">${esc(st.observation || st.summary || "")}</pre>`;
+  } else if (st.screenshot && !blankPage) {
+    label = appFor(st.url); where = st.url;
+    body = `<img src="/api/runs/${encodeURIComponent(R.id)}/files/shots/${encodeURIComponent(st.screenshot)}" alt="Screen after step ${st.n}: ${esc(titleFor(st))}" loading="lazy">`;
+  } else {
+    label = "Browser"; where = a.url ? shortUrl(a.url) : st.url || "";
+    body = `<div class="blank">${esc(st.summary || "No page was shown for this step.")}</div>`;
+  }
+  return `<div class="frame">
+    <div class="chrome"><span class="app">${esc(label)}</span><span class="url" title="${esc(where)}">${esc(where)}</span>${nav}</div>
+    ${body}</div>
     <p class="caption"><b>Step ${st.n}.</b> ${esc(titleFor(st))}. <span class="mono" style="color:var(--text-3)">${esc(st.summary || "")}</span></p>
     ${R.follow ? "" : `<button class="btn" data-follow>Follow live</button>`}`;
 }

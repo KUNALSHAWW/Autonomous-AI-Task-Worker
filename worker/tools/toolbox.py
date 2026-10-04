@@ -279,6 +279,19 @@ class Toolbox:
                 await asyncio.sleep(1.5 * (i + 1))
                 continue
             break
+        ctype = (resp.headers.get("content-type") or "").lower()
+        if resp.status < 400 and not any(t in ctype for t in ("json", "text", "html", "xml")) and ctype:
+            # A file (PDF, image...): save it like a browser download so read_file can parse it.
+            disp = resp.headers.get("content-disposition") or ""
+            m = re.search(r'filename="?([^";]+)"?', disp)
+            name = re.sub(r"[^\w.\-]+", "_", (m.group(1) if m else real_url.rstrip("/").rsplit("/", 1)[-1]) or "download")
+            os.makedirs(os.path.join(self.workdir, "files"), exist_ok=True)
+            with open(os.path.join(self.workdir, "files", name), "wb") as f:
+                f.write(await resp.body())
+            if write:
+                write.status, write.outcome = resp.status, self.gate.classify(resp.status)
+            return ToolResult(True, f"{method} {url} -> HTTP {resp.status} ({ctype}). Saved the file as "
+                                    f"files/{name}. Use read_file to read it.", None, "", f"{method} {url}")
         text = self.env.vault.scrub(await resp.text())
         try:
             text = json.dumps(json.loads(text), indent=1)[:12000]

@@ -108,3 +108,19 @@ async def test_api_calls_get_the_manifest_credentials_automatically(sandbox):
         assert "erp_tok_" not in r.output  # and the token itself never shows up
     finally:
         await b.close()
+
+
+async def test_api_file_downloads_are_saved_for_read_file(sandbox):
+    reset(sandbox, seed=46)
+    st, gate, b, tb = await _box(sandbox)
+    try:
+        msgs = await tb.run("http_request", {"method": "GET", "url": f"{sandbox}/acme/mail/api/messages"}, 1)
+        import json, re
+        url = re.search(r'"url": "(/acme/mail/att/[^"]+\.pdf)"', msgs.output).group(1)
+        r = await tb.run("http_request", {"method": "GET", "url": sandbox + url}, 2)
+        assert r.ok and "Saved the file as files/" in r.output, r.output
+        name = re.search(r"files/(\S+?\.pdf)", r.output).group(1)
+        f = await tb.run("read_file", {"path": f"files/{name}"}, 3)
+        assert f.ok and "page 1" in f.output
+    finally:
+        await b.close()
