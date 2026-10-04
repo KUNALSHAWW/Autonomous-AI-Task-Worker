@@ -195,8 +195,10 @@ class Gate:
                 return Decision("deny", f"The user declined this action ({rule['id']}). Do not attempt it again.",
                                 rule, fp)
             if (rule["id"], key) not in self.grants:
+                scrub = self.env.vault.scrub
+                shown = {scrub(str(k)): scrub(str(v)) for k, v in fields.items()}
                 return Decision("approval", f"Policy '{rule['id']}': {rule.get('description', '')} [{detail}]",
-                                {**rule, "_key": key}, fp)
+                                {**rule, "_key": key, "_fields": shown}, fp)
         if self.info_only:
             rule = {"id": "information_only_task", "description": "The task was understood as a question, but this "
                     "action would change data.", "_key": f"information_only_task:{fp}"}

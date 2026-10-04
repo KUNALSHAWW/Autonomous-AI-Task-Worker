@@ -373,7 +373,9 @@ class Agent:
             text = (f"Approval needed. Company policy '{rule.get('id')}' applies: {rule.get('description', '')}\n"
                     f"The worker wants to: {res.approval['message']}\nAction: {payload}\nApprove this action?")
             return {"route": "human", "pending": self._question(
-                "approval", text, "approval", ["approve", "deny"], {"rule": rule.get("id"), "action": payload},
+                "approval", text, "approval", ["approve", "deny"],
+                {"rule": rule.get("id"), "action": payload, "args": self._public_args(args),
+                 "fields": rule.get("_fields") or {}},
                 extra={"rule": rule, "action": payload, "output": res.output})}
         return {"route": "act", "pending": None}
 

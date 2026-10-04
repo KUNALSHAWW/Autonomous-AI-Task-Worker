@@ -6,8 +6,14 @@ services:
     healthCheckPath: /api/health
     envVars:
       - key: LLM_PROVIDER
-        value: gemini
-      - key: GEMINI_API_KEY
+        value: ollama
+      - key: OLLAMA_API_KEY
         sync: false      # set in the Render dashboard, never committed
+      - key: OLLAMA_MODEL
+        sync: false
+      - key: EMBED_SANDBOX
+        value: "1"
+      - key: MAX_CONCURRENT_RUNS
+        value: "1"
       - key: SANDBOX_ADMIN_TOKEN
         generateValue: true

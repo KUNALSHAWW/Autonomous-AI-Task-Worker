@@ -5,16 +5,41 @@ This document explains how a task moves through the system and why each piece is
 ## The pieces
 
 ```
-              ┌────────────────────────── worker (generic) ───────────────────────────┐
- task ──> API/CLI ──> RunManager ──> Agent graph ──> Toolbox ──> BrowserSession ──┐    │
-              │            │            │  intake        │        (Playwright)     │    │
-              │      events/SSE         │  act  <─ guard  │                         ▼    │
-              │      replies            │  verify         ├──> file reader      Gate ───┼──> sandbox company
-              │                         │  report         └──> HTTP client ──────┘     │   (separate process)
-              └──────────── config/environment.yaml (apps, secrets, policy) ───────────┘
+ task -> console / API / CLI -> RunManager -> LangGraph graph ----> Toolbox -> BrowserSession (Playwright) --+
+                                   |           intake               |         file reader                    |
+                             events (SSE)      act <-> human         |         HTTP client -------------------+--> Gate --> sandbox company
+                             replies           verify -> investigator (Deep Agents, read only)                     (separate process or embedded)
+                                               report
+                  config/environment.yaml: apps, secrets, network rules, policy
 ```
 
-The sandbox runs as its own process on its own port. The agent reaches it over real HTTP through a real browser, exactly like it would reach any internal tool. The API server also reverse-proxies `/acme/*` so one public port can show both.
+The sandbox is a separate FastAPI app. Locally it runs as its own process. On small hosts it is mounted into the same process (`EMBED_SANDBOX=1`), and then the agent is additionally kept out of the worker's own `/api`, `/docs` and `/static` paths. Either way the agent reaches it over real HTTP through a real browser, exactly like any internal tool.
+
+## The graph
+
+`worker/agent/engine.py` builds a LangGraph `StateGraph`:
+
+```
+START -> intake --(questions?)--> human --> act
+           |                                ^  |
+           +------------> act <-------------+  +--(finish)--> verify --(failed, < 2 rounds)--> act
+                           ^ |                                  |
+                           | +--(ask_user / approval)--> human   +--> report --> END
+```
+
+- **The graph state is two keys.** `route` names the next node; `pending` holds the question waiting for a human. Everything else lives in `RunState`, which is written to `state.json` after every step. Keeping the graph state tiny makes routing obvious, and keeps the big state in one place that the UI, the verifier and the report all read.
+- **`human` calls `interrupt(pending)`.** The driver in `Agent.run` sees `__interrupt__` and shows the question (an SSE event, the approval sheet in the UI). It waits for `/reply` and resumes with `Command(resume=answer)`. On resume the node runs again from the top and `interrupt()` returns the answer. That is why nothing with side effects happens before the `interrupt()` call.
+- **Checkpointing.** `MemorySaver` keeps one thread per run, with thread id = run id. A durable saver is the obvious next step: see "What I would build next" in the README.
+- **One tool call per `act` superstep.** The recursion limit is set from `MAX_STEPS`.
+
+## Models
+
+`worker/llm/langchain_llm.py` wraps any LangChain chat model behind the small `chat()` interface the act loop uses. ChatOllama is the default:
+
+- with `OLLAMA_API_KEY` it talks to `https://ollama.com` using a bearer token
+- without a key it uses `OLLAMA_BASE_URL`, i.e. a local server
+
+Tool calls use `bind_tools`, and JSON-mode calls use `format="json"`. If a model refuses native tools, the adapter switches to text tool calls and adds the tool catalogue to the prompt. The same `ChatOllama` object is handed to the Deep Agents investigator.
 
 ## Lifecycle of a run
 
@@ -93,6 +118,7 @@ URL: http://127.0.0.1:8100/acme/erp/bills/new | Title: New bill - AcmeERP | HTTP
 - A `*` marks elements that are new since the last view on the same page.
 - `BLOCKED: covered by overlay` comes from `elementFromPoint`, so the agent knows to dismiss the dialog instead of clicking into it for 30 seconds.
 - Text from pages and files is wrapped in an "untrusted content" envelope.
+- For grounding (`remember` quotes, page checks, investigator evidence), input values, selected options and link targets are stripped out. So whatever the agent typed, or a search box echoing its own query, can never count as evidence.
 - Secret values are scrubbed and replaced with their placeholders.
 
 ### 5. Guard (code, every step)
@@ -110,6 +136,7 @@ This follows Magentic-One's stall counter, but in code instead of an extra model
 
 Browser traffic goes through `context.route("**/*")`, and HTTP tool calls call the same `Gate` directly.
 
+- **Canonical URLs.** Every URL is percent-decoded, its doubled slashes collapsed and its dot segments resolved before any rule runs, so `/acme/%61dmin` is `/acme/admin`. The browser re-checks where a navigation actually landed, because redirect hops never reach the route handler. The HTTP tool follows redirects by hand and checks every hop.
 - **Origins and paths.** Only origins in the manifest are allowed. `denied_paths` blocks pages like the sandbox admin, which holds the ground truth.
 - **Policy rules.** These come from the manifest, for example:
   ```yaml
@@ -121,7 +148,10 @@ Browser traffic goes through `context.route("**/*")`, and HTTP tool calls call t
   Form fields are mapped from their HTML names to visible labels before matching. That matters here because the ERP randomizes field names per seed. An approval covers that rule plus those values only: approving 12,480.50 does not approve 50,000.
 - **Approval flow.** A blocked navigation is answered with HTTP 204, so the browser stays on the filled form. The run pauses with the exact action. On approve, the grant is stored and the agent is told to resubmit. On deny, any identical attempt is refused from then on.
 - **Duplicate guard.** Every write is recorded with a fingerprint (method, path, normalized fields). An identical write after a success or an unclear failure is refused until the agent has read from that same app again. This is the "did it land?" check, forced in code.
+- **Sign-ins.** A request that carries a vault credential is a sign-in, not a data change. It is allowed even in dry run, during verification and on information-only tasks, and it is never recorded as a write.
+- **Information-only tasks.** If intake decides the user only asked a question, any data change needs explicit approval.
 - **Read-only mode** during verification. **Dry run** records writes without sending them.
+- **Secret hygiene.** Values in the write ledger, tool errors and verifier messages pass through the vault scrubber.
 
 ### 7. Verify
 
@@ -135,7 +165,7 @@ This runs when the agent calls `finish` with status completed, or after the budg
     "expect": {"amount": "{{fact:amount}}", "due_date": "{{fact:due_date}}"}, "count": "exactly_one"}
    ```
    Code fills in the fact references, runs a GET and matches records. Other check types: `page_text`, `user_notified`, and `judge` as a last resort.
-3. **Judge.** This is a read-only mini agent. A "pass" counts only if its evidence quote appears in something it observed during its own investigation.
+3. **Investigator.** This handles criteria that code cannot probe. It is a LangChain Deep Agent (`create_deep_agent`) with only the read tools plus `submit_verdict`, and it gets the built-in planner, scratchpad and sub-agents for free. A "pass" counts only if its evidence quote appears in something it observed during its own investigation. Without a LangChain model (for example in scripted runs), a small built-in read-only loop does the same job.
 4. **Ledger.** Writes, their outcomes, unresolved failures, and identical successful writes.
 
 The outcome is one of `verified`, `partially_verified`, `unverified` (a check couldn't run), `failed`, or `needs_attention` (the worker finished as blocked). On failure, the problems go back to the act loop as a supervisor note, with at most `MAX_REPAIR_ROUNDS` (2) rounds.
@@ -182,3 +212,15 @@ To point the worker at different software, write a new manifest:
 - policy: rules
 
 Then set `WORKER_ENVIRONMENT=path/to/it.yaml`. Nothing under `worker/` changes, and `tests/test_generalization.py` fails the build if domain words leak into agent code.
+
+## The console
+
+`worker/web/` is a framework-free web app, served by the API at `/`. Every screen is built from the run's event stream:
+
+- **One reducer, live or replayed.** Live runs stream over SSE. Finished runs from earlier server processes are replayed from their `events.jsonl`, so the same code renders both.
+- **Ledger.** One row per step: the time, the model's own reason as the title, and the exact action in mono underneath. Clicking a row shows its screenshot and observation.
+- **Evidence pane.** Four tabs: Screen (browser frame with prev and next), Facts (value, verbatim quote, blind re-read result), Checks (criteria and probe results), and Changes (the gate's write ledger, approvals, assumptions).
+- **Approval sheet.** It shows the policy rule and exactly the labelled fields the gate saw. `A` approves and `D` denies. Clarifications use the same sheet, with the options as buttons.
+- **Composer.** Example tasks come from the current seeded world, plus controls to rebuild the company with a seed and chaos modes.
+
+Design tokens are at the top of `app.css`. The direction is a graphite surface ladder with hairline borders, one cobalt accent used only for the main action, green, amber and red only for meaning, and IBM Plex Sans and Mono.

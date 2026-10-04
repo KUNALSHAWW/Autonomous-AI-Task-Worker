@@ -17,6 +17,25 @@ PROVIDER_PRESETS = {
 }
 
 
+def _load_dotenv() -> None:
+    """Read KEY=value lines from a .env file in the project root. Real environment variables win."""
+    path = os.path.join(os.path.dirname(__file__), "..", ".env")
+    if not os.path.exists(path):
+        return
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            value = value.strip().strip('"').strip("'")
+            if key.strip() and value and key.strip() not in os.environ:
+                os.environ[key.strip()] = value
+
+
+_load_dotenv()
+
+
 def _env(name: str, default: str = "") -> str:
     return os.environ.get(name, default)
 

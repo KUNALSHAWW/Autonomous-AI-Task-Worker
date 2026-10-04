@@ -188,7 +188,22 @@ async def get_run(run_id: str):
 
 @app.get("/api/runs/{run_id}/events")
 async def run_events(run_id: str, request: Request, after: int = 0):
-    h = _handle(run_id)
+    h = manager.runs.get(run_id)
+    if h is None:
+        # A run from an earlier server process: replay its event log from disk.
+        path = os.path.join(settings.runs_dir, os.path.basename(run_id), "events.jsonl")
+        if not os.path.exists(path):
+            raise HTTPException(404, "run not found")
+
+        async def replay():
+            with open(path) as f:
+                for line in f:
+                    ev = json.loads(line)
+                    if ev["seq"] > after:
+                        yield f"id: {ev['seq']}\nevent: {ev['type']}\ndata: {line.strip()}\n\n"
+            yield "event: end\ndata: {}\n\n"
+
+        return StreamingResponse(replay(), media_type="text/event-stream", headers={"Cache-Control": "no-cache"})
 
     async def stream():
         q = manager.subscribe(run_id)

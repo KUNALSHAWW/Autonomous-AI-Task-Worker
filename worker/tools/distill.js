@@ -30,6 +30,15 @@
     if (!l) l = el.getAttribute('placeholder') || el.getAttribute('title') || el.getAttribute('name') || '';
     return clean(l);
   };
+  // The field's own name, without hint text nested inside the label (used for matching and policy)
+  const nameOf = el => {
+    const lab = (el.labels && el.labels[0]) || (el.id && document.querySelector(`label[for="${CSS.escape(el.id)}"]`));
+    if (lab) {
+      const own = clean(Array.from(lab.childNodes).filter(n => n.nodeType === 3).map(n => n.textContent).join(' '));
+      if (own) return own;
+    }
+    return labelOf(el);
+  };
   const coveredBy = el => {
     const r = el.getBoundingClientRect();
     const x = r.left + Math.min(r.width / 2, 20), y = r.top + Math.min(r.height / 2, 10);
@@ -59,17 +68,17 @@
       const opts = Array.from(el.options).map(o => clean(o.text));
       const sel = el.selectedIndex >= 0 ? clean(el.options[el.selectedIndex].text) : '';
       s = `select "${labelOf(el)}" selected="${sel}" options=[${opts.slice(0, 40).join(' | ')}${opts.length > 40 ? ' | ...' : ''}]`;
-      if (el.name) fields[el.name] = labelOf(el);
+      if (el.name) fields[el.name] = nameOf(el);
     } else if (t === 'INPUT' && ['checkbox', 'radio'].includes(el.type)) {
       s = `${el.type} "${labelOf(el)}"${el.checked ? ' checked' : ''}`;
-      if (el.name) fields[el.name] = labelOf(el);
+      if (el.name) fields[el.name] = nameOf(el);
     } else if (t === 'INPUT' || t === 'TEXTAREA') {
       if (el.type === 'hidden') return null;
       const kind = el.type === 'password' ? 'password' : (t === 'TEXTAREA' ? 'textarea' : 'textbox');
       const val = el.type === 'password' ? (el.value ? '********' : '') : el.value;
       s = `${kind} "${labelOf(el)}" value="${(val || '').slice(0, 120)}"`;
       if (el.required) s += ' required';
-      if (el.name) fields[el.name] = labelOf(el);
+      if (el.name) fields[el.name] = nameOf(el);
     } else {
       s = `${el.getAttribute('role') || t.toLowerCase()} "${clean(el.innerText).slice(0, 80)}"`;
     }
