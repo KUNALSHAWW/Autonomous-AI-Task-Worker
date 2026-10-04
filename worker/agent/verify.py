@@ -19,7 +19,7 @@ from __future__ import annotations
 import json
 import re
 
-from ..llm.base import ToolSpec, validate_args
+from ..llm.base import ToolSpec, coerce_args, validate_args
 from ..tools.toolbox import READ_TOOLS, TOOL_SPECS
 from . import normalize, prompts
 from .state import StepRecord
@@ -253,11 +253,14 @@ class Verifier:
                                              claimed=json.dumps(s.claimed or {})[:800],
                                              history="\n".join(history[-8:]) or "(none)", observation=observation)
             reply = await a.llm_call([{"role": "system", "content": system}, {"role": "user", "content": turn}],
-                                     tools=tools, purpose="verify_judge")
+                                     tools=tools, purpose="verify_judge", max_tokens=3000)
             call = reply.tool_call
             if call is None:
                 observation = "ERROR: call a tool."
                 continue
+            if call.name in TOOL_SPECS or call.name == "verdict":
+                spec = VERDICT if call.name == "verdict" else TOOL_SPECS[call.name]
+                call.args = coerce_args(spec.parameters, call.args)
             if call.name == "verdict":
                 if validate_args(VERDICT.parameters, call.args):
                     observation = "ERROR: verdict needs passed and evidence."

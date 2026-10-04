@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: ai-task-worker
+    runtime: docker
+    plan: starter        # Chromium + two small Python processes need more than the free 512 MB
+    healthCheckPath: /api/health
+    envVars:
+      - key: LLM_PROVIDER
+        value: gemini
+      - key: GEMINI_API_KEY
+        sync: false      # set in the Render dashboard, never committed
+      - key: SANDBOX_ADMIN_TOKEN
+        generateValue: true

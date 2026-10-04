@@ -21,7 +21,7 @@ from typing import Awaitable, Callable
 
 from ..environment import Environment
 from ..gate import Gate
-from ..llm.base import LLMError, extract_json, validate_args
+from ..llm.base import LLMError, coerce_args, extract_json, validate_args
 from ..tools.browser import BrowserSession
 from ..tools.toolbox import ACT_TOOLS, TOOL_SPECS, Toolbox, ToolResult
 from . import prompts
@@ -29,6 +29,7 @@ from .state import ChecklistItem, Contract, Pending, RunState, StepRecord
 from .verify import Verifier
 
 Emit = Callable[[str, dict], Awaitable[None]]
+CONTENT_TOOLS = {"browser_goto", "browser_click", "browser_fill_form", "browser_read", "read_file", "http_request"}
 AskUser = Callable[[Pending], Awaitable[str]]
 
 
@@ -47,6 +48,7 @@ class Agent:
                              on_notify=lambda m: self.emit("notify", {"message": m}))
         self.env_text = env.describe()
         self.last_output = "(nothing yet: start by deciding where to look)"
+        self.last_content = ""
         self.started = time.time()
         self.stalls = 0
 
@@ -107,7 +109,7 @@ class Agent:
         messages = [{"role": "user", "content": prompt}]
         last_err = ""
         for _ in range(retries + 1):
-            reply = await self.llm_call(messages, json_mode=True, purpose=purpose, max_tokens=2000)
+            reply = await self.llm_call(messages, json_mode=True, purpose=purpose, max_tokens=4000)
             try:
                 obj = extract_json(reply.text)
                 if isinstance(obj, dict):
@@ -207,7 +209,7 @@ class Agent:
                 await self.emit("note", {"message": "Budget exhausted, stopping."})
                 return "verify"
             messages = [{"role": "system", "content": system}, {"role": "user", "content": self._turn_prompt()}]
-            reply = await self.llm_call(messages, tools=tools, purpose="act")
+            reply = await self.llm_call(messages, tools=tools, purpose="act", max_tokens=4000)
             call = reply.tool_call
             err = None
             if call is None:
@@ -217,6 +219,7 @@ class Agent:
             elif "__malformed__" in call.args:
                 err = "Your tool arguments were not valid JSON."
             else:
+                call.args = coerce_args(TOOL_SPECS[call.name].parameters, call.args)
                 err = validate_args(TOOL_SPECS[call.name].parameters, call.args)
             if err:
                 bad_calls += 1
@@ -241,7 +244,15 @@ class Agent:
                          res.output.split("\n")[0][:300], self.browser.page.url if self.browser.page else "",
                          res.screenshot, round(time.time() - t0, 2))
         s.steps.append(rec)
-        self.last_output = res.output
+        if name in CONTENT_TOOLS:
+            self.last_content = res.output
+            self.last_output = res.output
+        else:
+            # Memory/plan/notify results are short; keep the page or document in view so the
+            # model does not have to re-open it to continue working with it.
+            self.last_output = res.output + (
+                "\n\nThe most recent page/document you looked at (still current):\n" + self.last_content
+                if self.last_content else "")
         await self.emit("step", {**rec.__dict__, "observation": res.output[:3000]})
         if res.finish:
             s.claimed = res.finish

@@ -81,6 +81,9 @@ class OpenAICompatLLM:
                         "content": "Your previous tool call was malformed. Reply with ONLY a JSON object "
                                    '{"tool": "<name>", "args": {...}} for your next action.'}]
                     continue
+                if resp.status_code == 400 and "response_format" in body:
+                    body = {k: v for k, v in body.items() if k != "response_format"}
+                    continue  # provider does not support JSON mode; the prompt already asks for JSON
                 if resp.status_code not in RETRYABLE:
                     raise LLMError(last)
                 ra = resp.headers.get("retry-after")

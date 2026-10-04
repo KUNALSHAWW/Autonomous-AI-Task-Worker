@@ -1,11 +1,9 @@
 """Provider-agnostic LLM interface.
 
-The agent only ever needs two things from a model:
-  * `decide(...)`: pick exactly one tool call given a prompt and a tool list
-  * `complete_json(...)`: return a JSON object for a structured prompt
-
-Everything provider-specific (wire format, retries, tool-call repair) stays
-behind this interface so the agent code never changes when the model does.
+The agent needs exactly one call shape: `chat(messages, tools=..., json_mode=...)`
+returning text and at most one tool call. Everything provider specific (wire
+format, retries, recovering tool calls written as text) stays behind it, so the
+agent code does not change when the model does.
 """
 from __future__ import annotations
 
@@ -137,3 +135,31 @@ def validate_args(schema: dict, args: dict) -> str | None:
         if enum and v not in enum:
             return f"argument '{k}' must be one of {enum}"
     return None
+
+
+def coerce_args(schema: dict, args: dict) -> dict:
+    """Fix the most common ways models get argument types wrong (JSON-in-a-string,
+    "true" for booleans, "2" for integers) before validating."""
+    if not isinstance(args, dict):
+        return args
+    props = schema.get("properties", {})
+    out = dict(args)
+    for k, v in args.items():
+        t = props.get(k, {}).get("type")
+        if t in ("object", "array") and isinstance(v, str):
+            try:
+                parsed = json.loads(v)
+                if isinstance(parsed, (dict, list)):
+                    out[k] = parsed
+            except json.JSONDecodeError:
+                pass
+        elif t == "boolean" and isinstance(v, str):
+            if v.strip().lower() in ("true", "yes", "1"):
+                out[k] = True
+            elif v.strip().lower() in ("false", "no", "0"):
+                out[k] = False
+        elif t == "integer" and isinstance(v, str) and v.strip().isdigit():
+            out[k] = int(v.strip())
+        elif t == "string" and isinstance(v, (int, float)) and not isinstance(v, bool):
+            out[k] = str(v)
+    return out
